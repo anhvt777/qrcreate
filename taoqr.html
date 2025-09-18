@@ -1,1 +1,168 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Custom QR demo</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- JSZip + FileSaver nếu bạn cần xuất ZIP (bỏ nếu k cần) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <style>body{font-family:Arial;padding:16px}</style>
+</head>
+<body>
+  <h2>Tạo QR tuỳ biến (QRCode.js) — demo</h2>
 
+  <label>Nội dung QR (txt hoặc JSON):</label><br>
+  <textarea id="payload" rows="3" style="width:100%">{"account":"123456","name":"Nguyen Van A","amount":100000}</textarea><br>
+
+  <label>Kích thước QR (px):</label>
+  <input id="size" type="number" value="300" style="width:100px"><br>
+
+  <label>Màu QR / Nền:</label>
+  <input id="colorDark" type="color" value="#000000">
+  <input id="colorLight" type="color" value="#ffffff"><br>
+
+  <label>Logo (upload PNG/JPG) — optional:</label>
+  <input id="logoFile" type="file" accept="image/*"><br>
+
+  <label>Ghi chú (sẽ in dưới ảnh):</label>
+  <input id="note" type="text" value="Người nộp: Nguyen Van A" style="width:100%"><br><br>
+
+  <button id="gen">Generate QR</button>
+  <button id="download">Download PNG</button>
+
+  <div id="preview" style="margin-top:12px;"></div>
+
+<script>
+const preview = document.getElementById('preview');
+let lastCanvasBlob = null;
+let lastFilename = 'custom_qr.png';
+let uploadedLogoDataUrl = null;
+document.getElementById('logoFile').addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if (!f) { uploadedLogoDataUrl = null; return; }
+  const fr = new FileReader();
+  fr.onload = () => uploadedLogoDataUrl = fr.result;
+  fr.readAsDataURL(f);
+});
+
+document.getElementById('gen').addEventListener('click', async ()=>{
+  const text = document.getElementById('payload').value;
+  const size = parseInt(document.getElementById('size').value)||300;
+  const colorDark = document.getElementById('colorDark').value;
+  const colorLight = document.getElementById('colorLight').value;
+  const note = document.getElementById('note').value || '';
+
+  // 1) generate QR as image using QRCode.js in a temp div
+  const temp = document.createElement('div');
+  new QRCode(temp, {
+    text,
+    width: size,
+    height: size,
+    colorDark,
+    colorLight,
+    correctLevel: QRCode.CorrectLevel.H
+  });
+
+  // QRCode.js may produce <img> or <canvas>
+  await new Promise(r => setTimeout(r, 50)); // small wait
+  const imgEl = temp.querySelector('img') || temp.querySelector('canvas');
+  if (!imgEl) { alert('Không tạo được QR'); return; }
+
+  // get dataURL
+  const dataUrl = imgEl.tagName.toLowerCase() === 'img' ? imgEl.src : imgEl.toDataURL();
+
+  // 2) draw to final canvas with note + logo
+  const qrImg = new Image();
+  qrImg.src = dataUrl;
+  await new Promise((res,rej)=>{ qrImg.onload=res; qrImg.onerror=rej; });
+
+  const canvas = document.createElement('canvas');
+  const noteHeight = 40;
+  canvas.width = qrImg.width;
+  canvas.height = qrImg.height + noteHeight;
+  const ctx = canvas.getContext('2d');
+
+  // white bg
+  ctx.fillStyle = colorLight; 
+  ctx.fillRect(0,0, canvas.width, canvas.height);
+
+  // draw QR
+  ctx.drawImage(qrImg, 0, 0);
+
+  // draw logo if present (limit to 20% of QR size)
+  if (uploadedLogoDataUrl) {
+    const logo = new Image();
+    logo.src = uploadedLogoDataUrl;
+    await new Promise((res,rej)=>{ logo.onload=res; logo.onerror=rej; });
+    // compute size
+    const maxLogoW = canvas.width * 0.22;
+    const maxLogoH = canvas.height * 0.22;
+    let lw = logo.width, lh = logo.height;
+    const scale = Math.min(maxLogoW / lw, maxLogoH / lh, 1);
+    lw = lw * scale; lh = lh * scale;
+    const lx = (canvas.width - lw)/2;
+    const ly = (canvas.width - lh)/2; // center on QR area (not on note area)
+    // optional: round bg behind logo
+    ctx.save();
+    ctx.beginPath();
+    const pad = 6;
+    const bx = lx - pad, by = ly - pad, bw = lw + pad*2, bh = lh + pad*2;
+    ctx.fillStyle = '#ffffff';
+    // rounded rectangle
+    const r = 8;
+    ctx.moveTo(bx + r, by);
+    ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+    ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+    ctx.arcTo(bx, by + bh, bx, by, r);
+    ctx.arcTo(bx, by, bx + bw, by, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.drawImage(logo, lx, ly, lw, lh);
+    ctx.restore();
+  }
+
+  // draw note
+  ctx.fillStyle = '#000';
+  ctx.textAlign = 'center';
+  ctx.font = '16px Arial';
+  wrapText(ctx, note, canvas.width/2, qrImg.height + 22, canvas.width - 20, 18);
+
+  // show preview
+  preview.innerHTML = '';
+  const imgPreview = new Image();
+  imgPreview.src = canvas.toDataURL('image/png');
+  preview.appendChild(imgPreview);
+
+  // store blob for download/zip
+  canvas.toBlob(blob => {
+    lastCanvasBlob = blob;
+    lastFilename = 'custom_qr.png';
+  }, 'image/png');
+});
+
+// helper: wrap text
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '', ty = y;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && n > 0) {
+      ctx.fillText(line, x, ty);
+      line = words[n] + ' ';
+      ty += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line.trim(), x, ty);
+}
+
+document.getElementById('download').addEventListener('click', () => {
+  if (!lastCanvasBlob) { alert('Chưa có QR để tải — Hãy Generate trước'); return; }
+  saveAs(lastCanvasBlob, lastFilename);
+});
+</script>
+</body>
+</html>
