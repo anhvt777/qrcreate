@@ -1,168 +1,207 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8" />
-  <title>Custom QR demo</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- JSZip + FileSaver nếu bạn cần xuất ZIP (bỏ nếu k cần) -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Excel → VietQR</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-  <style>body{font-family:Arial;padding:16px}</style>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f5f6fa; }
+    header {
+      background: #006B68; /* màu xanh ngọc bích BIDV */
+      color: white;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    header h1 { margin: 0; font-size: 22px; }
+    header p { margin: 5px 0; font-size: 14px; }
+
+    /* chữ chạy quảng cáo */
+    .marquee {
+      overflow: hidden;
+      position: relative;
+      height: 25px;
+      margin-top: 8px;
+    }
+    .marquee span {
+      display: inline-block;
+      white-space: nowrap;
+      position: absolute;
+      will-change: transform;
+      animation: marquee 12s linear infinite;
+      font-size: 14px;
+      font-weight: bold;
+      color: #FFC62F;
+    }
+    @keyframes marquee {
+      0%   { transform: translateX(100%); }
+      100% { transform: translateX(-100%); }
+    }
+
+    main { padding: 20px; }
+    #controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+    #upload, #search, #downloadAll {
+      flex: 1;
+      min-width: 200px;
+    }
+    #upload { padding: 6px; }
+    #search {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      font-size: 14px;
+    }
+    #downloadAll {
+      background: #FFC62F;
+      border: none;
+      color: #006B68;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+    }
+    #downloadAll:hover { background: #e6b22b; }
+    
+    /* QR grid responsive */
+    #qrs {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .qr-item {
+      border: 1px solid #ccc;
+      background: white;
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    .qr-item img { display: block; margin: auto; max-width: 150px; width: 100%; height: auto; }
+    .qr-item a {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 13px;
+      text-decoration: none;
+      color: #0070f3;
+    }
+
+    /* Mobile chỉnh font nhỏ hơn */
+    @media (max-width: 600px) {
+      header h1 { font-size: 18px; }
+      header p, .marquee span { font-size: 12px; }
+    }
+  </style>
 </head>
 <body>
-  <h2>Tạo QR tuỳ biến (QRCode.js) — demo</h2>
+  <header>
+    <h1>PGD ĐƯỜNG 9 - BIDV QUẢNG TRỊ - Tool Excel → QR Code VietQR</h1>
+    <p>Tải file Excel để sinh QR thanh toán, tìm kiếm và lưu về máy tính</p>
+    <div class="marquee">
+      <span>🎉 Ưu đãi đặc biệt: Miễn phí chuyển khoản cho khách hàng BIDV sử dụng VietQR | Liên hệ PGD Đường 9 - BIDV Quảng Trị để biết thêm chi tiết 🎉</span>
+    </div>
+  </header>
 
-  <label>Nội dung QR (txt hoặc JSON):</label><br>
-  <textarea id="payload" rows="3" style="width:100%">{"account":"123456","name":"Nguyen Van A","amount":100000}</textarea><br>
+  <main>
+    <div id="controls">
+      <input type="file" id="upload" accept=".xlsx,.xls" />
+      <input type="text" id="search" placeholder="🔍 Tìm theo AccountName / AccountNumber / Amount / Remark..." />
+      <button id="downloadAll" style="display:none;">⬇ Tải tất cả QR (ZIP)</button>
+    </div>
 
-  <label>Kích thước QR (px):</label>
-  <input id="size" type="number" value="300" style="width:100px"><br>
+    <div id="qrs"></div>
+  </main>
 
-  <label>Màu QR / Nền:</label>
-  <input id="colorDark" type="color" value="#000000">
-  <input id="colorLight" type="color" value="#ffffff"><br>
+  <script>
+    let qrList = [];
+    let allData = [];
 
-  <label>Logo (upload PNG/JPG) — optional:</label>
-  <input id="logoFile" type="file" accept="image/*"><br>
+    document.getElementById('upload').addEventListener('change', handleFile, false);
+    document.getElementById('downloadAll').addEventListener('click', downloadAll, false);
+    document.getElementById('search').addEventListener('input', filterQR, false);
 
-  <label>Ghi chú (sẽ in dưới ảnh):</label>
-  <input id="note" type="text" value="Người nộp: Nguyen Van A" style="width:100%"><br><br>
+    function handleFile(e) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, {header:1});
+        allData = [];
+        qrList = [];
+        document.getElementById('qrs').innerHTML = "";
 
-  <button id="gen">Generate QR</button>
-  <button id="download">Download PNG</button>
+        for (let i = 1; i < rows.length; i++) {
+          const [AccountNumber, Bank, BankBin, Amount, AccountName, Remark] = rows[i];
+          if (!AccountNumber || !BankBin) continue;
 
-  <div id="preview" style="margin-top:12px;"></div>
+          const qrUrl = `https://img.vietqr.io/image/${BankBin}-${AccountNumber}-compact2.png?amount=${Amount || ''}&addInfo=${encodeURIComponent(Remark || '')}&accountName=${encodeURIComponent(AccountName || '')}`;
 
-<script>
-const preview = document.getElementById('preview');
-let lastCanvasBlob = null;
-let lastFilename = 'custom_qr.png';
-let uploadedLogoDataUrl = null;
-document.getElementById('logoFile').addEventListener('change', e=>{
-  const f = e.target.files[0];
-  if (!f) { uploadedLogoDataUrl = null; return; }
-  const fr = new FileReader();
-  fr.onload = () => uploadedLogoDataUrl = fr.result;
-  fr.readAsDataURL(f);
-});
+          const item = {
+            url: qrUrl,
+            filename: `qr_${AccountNumber}.png`,
+            AccountNumber, Bank, Amount, AccountName, Remark
+          };
+          allData.push(item);
+        }
 
-document.getElementById('gen').addEventListener('click', async ()=>{
-  const text = document.getElementById('payload').value;
-  const size = parseInt(document.getElementById('size').value)||300;
-  const colorDark = document.getElementById('colorDark').value;
-  const colorLight = document.getElementById('colorLight').value;
-  const note = document.getElementById('note').value || '';
+        renderQR(allData);
 
-  // 1) generate QR as image using QRCode.js in a temp div
-  const temp = document.createElement('div');
-  new QRCode(temp, {
-    text,
-    width: size,
-    height: size,
-    colorDark,
-    colorLight,
-    correctLevel: QRCode.CorrectLevel.H
-  });
-
-  // QRCode.js may produce <img> or <canvas>
-  await new Promise(r => setTimeout(r, 50)); // small wait
-  const imgEl = temp.querySelector('img') || temp.querySelector('canvas');
-  if (!imgEl) { alert('Không tạo được QR'); return; }
-
-  // get dataURL
-  const dataUrl = imgEl.tagName.toLowerCase() === 'img' ? imgEl.src : imgEl.toDataURL();
-
-  // 2) draw to final canvas with note + logo
-  const qrImg = new Image();
-  qrImg.src = dataUrl;
-  await new Promise((res,rej)=>{ qrImg.onload=res; qrImg.onerror=rej; });
-
-  const canvas = document.createElement('canvas');
-  const noteHeight = 40;
-  canvas.width = qrImg.width;
-  canvas.height = qrImg.height + noteHeight;
-  const ctx = canvas.getContext('2d');
-
-  // white bg
-  ctx.fillStyle = colorLight; 
-  ctx.fillRect(0,0, canvas.width, canvas.height);
-
-  // draw QR
-  ctx.drawImage(qrImg, 0, 0);
-
-  // draw logo if present (limit to 20% of QR size)
-  if (uploadedLogoDataUrl) {
-    const logo = new Image();
-    logo.src = uploadedLogoDataUrl;
-    await new Promise((res,rej)=>{ logo.onload=res; logo.onerror=rej; });
-    // compute size
-    const maxLogoW = canvas.width * 0.22;
-    const maxLogoH = canvas.height * 0.22;
-    let lw = logo.width, lh = logo.height;
-    const scale = Math.min(maxLogoW / lw, maxLogoH / lh, 1);
-    lw = lw * scale; lh = lh * scale;
-    const lx = (canvas.width - lw)/2;
-    const ly = (canvas.width - lh)/2; // center on QR area (not on note area)
-    // optional: round bg behind logo
-    ctx.save();
-    ctx.beginPath();
-    const pad = 6;
-    const bx = lx - pad, by = ly - pad, bw = lw + pad*2, bh = lh + pad*2;
-    ctx.fillStyle = '#ffffff';
-    // rounded rectangle
-    const r = 8;
-    ctx.moveTo(bx + r, by);
-    ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
-    ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
-    ctx.arcTo(bx, by + bh, bx, by, r);
-    ctx.arcTo(bx, by, bx + bw, by, r);
-    ctx.closePath();
-    ctx.fill();
-    ctx.drawImage(logo, lx, ly, lw, lh);
-    ctx.restore();
-  }
-
-  // draw note
-  ctx.fillStyle = '#000';
-  ctx.textAlign = 'center';
-  ctx.font = '16px Arial';
-  wrapText(ctx, note, canvas.width/2, qrImg.height + 22, canvas.width - 20, 18);
-
-  // show preview
-  preview.innerHTML = '';
-  const imgPreview = new Image();
-  imgPreview.src = canvas.toDataURL('image/png');
-  preview.appendChild(imgPreview);
-
-  // store blob for download/zip
-  canvas.toBlob(blob => {
-    lastCanvasBlob = blob;
-    lastFilename = 'custom_qr.png';
-  }, 'image/png');
-});
-
-// helper: wrap text
-function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
-  const words = text.split(' ');
-  let line = '', ty = y;
-  for (let n = 0; n < words.length; n++) {
-    const testLine = line + words[n] + ' ';
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxWidth && n > 0) {
-      ctx.fillText(line, x, ty);
-      line = words[n] + ' ';
-      ty += lineHeight;
-    } else {
-      line = testLine;
+        if (allData.length > 0) {
+          document.getElementById('downloadAll').style.display = "inline-block";
+        }
+      };
+      reader.readAsArrayBuffer(file);
     }
-  }
-  ctx.fillText(line.trim(), x, ty);
-}
 
-document.getElementById('download').addEventListener('click', () => {
-  if (!lastCanvasBlob) { alert('Chưa có QR để tải — Hãy Generate trước'); return; }
-  saveAs(lastCanvasBlob, lastFilename);
-});
-</script>
+    function renderQR(list) {
+      const container = document.getElementById('qrs');
+      container.innerHTML = "";
+      qrList = [];
+
+      list.forEach(item => {
+        qrList.push({url: item.url, filename: item.filename});
+
+        const div = document.createElement('div');
+        div.className = "qr-item";
+        div.innerHTML = `
+          <p><b>${item.AccountName || ''}</b><br>${item.AccountNumber} (${item.Bank || ''})<br>Số tiền: ${item.Amount || ''}<br>${item.Remark || ''}</p>
+          <img src="${item.url}" alt="QR" />
+          <a href="${item.url}" download="${item.filename}">⬇ Lưu ảnh</a>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function filterQR() {
+      const keyword = document.getElementById('search').value.toLowerCase();
+      if (!keyword) {
+        renderQR(allData);
+        return;
+      }
+      const filtered = allData.filter(item =>
+        (item.AccountName && item.AccountName.toLowerCase().includes(keyword)) ||
+        (item.AccountNumber && item.AccountNumber.toString().includes(keyword)) ||
+        (item.Amount && item.Amount.toString().includes(keyword)) ||
+        (item.Remark && item.Remark.toLowerCase().includes(keyword))
+      );
+      renderQR(filtered);
+    }
+
+    async function downloadAll() {
+      const zip = new JSZip();
+      for (const qr of qrList) {
+        const response = await fetch(qr.url);
+        const blob = await response.blob();
+        zip.file(qr.filename, blob);
+      }
+      const content = await zip.generateAsync({type:"blob"});
+      saveAs(content, "all_qr_codes.zip");
+    }
+  </script>
 </body>
 </html>
